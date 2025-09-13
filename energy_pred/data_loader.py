@@ -195,3 +195,13 @@ class GicaHackDataLoader:
     def _ensure_loaded(self):
         if self._df is None:
             raise RuntimeError("Data not loaded. Call load() first.")
+
+
+    def get_median_df(self) -> pd.DataFrame:
+        df_2025 = self._df.copy()
+        df_2025 = df_2025.set_index('timestamp')
+        df_2025 = df_2025.groupby('meter').resample('H').median()
+        df_2025 = df_2025.reset_index(level='timestamp')
+        df_2025 = df_2025.set_index('timestamp')
+        df_2025 = df_2025.groupby('timestamp')['import_diff'].median()
+        return df_2025
