@@ -1,0 +1,15 @@
+version: "3.9"
+services:
+  energy-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      TZ: Europe/Chisinau
+      MODEL_PATH: /models/energy_forecast_model.cbm
+      DATA_DIR: /data/GicaHack
+      FUTURE_HOURS: "24"
+    volumes:
+      - ./models:/models:ro
+      - ./data:/data:ro
+    restart: unless-stopped

@@ -1,0 +1,26 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    TZ=Europe/Chisinau
+
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# deps
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+# copy your code, model, and (optionally) some sample data
+COPY app/ /app/
+COPY energy_pred/ /app/energy_pred/
+# Option A: just keep it on PYTHONPATH
+ENV PYTHONPATH="/app:${PYTHONPATH}"
+# Option B (if you have pyproject/setup.cfg): pip install the package
+# RUN pip install -e /app/energy_pred
+
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host","0.0.0.0","--port","8000","--timeout-keep-alive","75"]
