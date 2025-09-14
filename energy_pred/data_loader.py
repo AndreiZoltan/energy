@@ -353,6 +353,76 @@ class GicaHackDataLoader:
         self._clean_df = df_final.to_frame(name='import_diff')
         return df_final.to_frame(name='import_diff')
     
+
+    def preprocess_and_normalize_consumption_export(self) -> pd.DataFrame:
+        """
+        Normalizes raw smart meter data by distributing accumulated consumption
+        over a consistent 15-minute frequency, then aggregates to a final
+        hourly median across all meters.
+
+        Args:
+            raw_df (pd.DataFrame): DataFrame with columns ['timestamp', 'meter', 'import_diff']
+                                where 'timestamp' can have variable time gaps.
+
+        Returns:
+            pd.DataFrame: A DataFrame indexed by the hour, with a single column
+                        containing the median hourly energy consumption.
+        """
+        # Ensure timestamp column is in datetime format
+        self._df['timestamp'] = pd.to_datetime(self._df['timestamp'])
+
+        def normalize_meter_data(df_meter):
+            """
+            Processes data for a single meter. This function is intended to be
+            used with pandas' .groupby().apply().
+            """
+            # Set timestamp as index and sort to ensure correct time delta calculation
+            df_meter = df_meter.sort_values('timestamp').set_index('timestamp')
+
+            # FIX: Aggregate duplicate timestamps before resampling
+            if df_meter.index.has_duplicates:
+                df_meter = df_meter.groupby(df_meter.index).mean()
+
+            # 1. Calculate time difference (in minutes) between consecutive readings
+            time_deltas = df_meter.index.to_series().diff().dt.total_seconds() / 60.0
+
+            # 2. Determine how many 15-minute "bins" each reading represents
+            num_bins = (time_deltas / 15.0).fillna(1).replace(0, 1)
+
+            # 3. Normalize the consumption by the number of bins
+            df_meter['normalized_diff'] = df_meter['export_diff'] / num_bins
+
+            # 4. Resample to a consistent 15-minute frequency and forward-fill
+            df_resampled = df_meter[['normalized_diff']].resample('15min').ffill()
+            
+            return df_resampled
+
+        print("Step 1: Normalizing data for each meter to a 15-minute frequency...")
+        df_normalized = self._df.groupby('meter').apply(normalize_meter_data)
+
+        print("Step 2: Aggregating to final hourly median...")
+        df_normalized = df_normalized.reset_index()
+        
+        # --- MODIFIED LOGIC STARTS HERE ---
+        
+        df_normalized = df_normalized.set_index('timestamp')
+        
+        # Step A: Discretize to hourly data for EACH meter by SUMMING the 15-min values.
+        # This calculates the total consumption for each hour for each meter.
+        df_hourly_per_meter = df_normalized.groupby('meter').resample('H')['normalized_diff'].sum()
+        
+        # Reset the index so we can group by the hourly timestamp
+        df_hourly_per_meter = df_hourly_per_meter.reset_index()
+        
+        # Step B: Finally, get the median of these hourly consumptions across all meters.
+        df_final = df_hourly_per_meter.groupby('timestamp')['normalized_diff'].median()
+        
+        # --- MODIFIED LOGIC ENDS HERE ---
+        
+        # Return as a DataFrame with a clear column name
+        self._clean_df['export_diff'] = df_final.to_frame(name='export_diff')
+        return df_final.to_frame(name='export_diff')
+    
     def add_weather_features(self, lat=47.01, lon=28.86, tz='Europe/Chisinau'):
         import requests
         df = pd.DataFrame(self._clean_df)  # Ensure df is a DataFrame
@@ -488,10 +558,16 @@ class GicaHackDataLoader:
         # --- lags ---
         for lag in [1, 2, 3, 24, 48, 168]:
             df[f"import_lag_{lag}"] = df["import_diff"].shift(lag)
+            df[f"export_lag_{lag}"] = df["export_diff"].shift(lag)
 
         # --- rolling stats (use shift(1) to avoid leakage) ---
         for window in [4, 8, 24, 72]:
             s = df["import_diff"].shift(1)
+            df[f"rolling_mean_{window}"] = s.rolling(window, min_periods=1).mean()
+            df[f"rolling_std_{window}"]  = s.rolling(window, min_periods=1).std()
+            df[f"rolling_max_{window}"]  = s.rolling(window, min_periods=1).max()
+        for window in [4, 8, 24, 72]:
+            s = df["export_diff"].shift(1)
             df[f"rolling_mean_{window}"] = s.rolling(window, min_periods=1).mean()
             df[f"rolling_std_{window}"]  = s.rolling(window, min_periods=1).std()
             df[f"rolling_max_{window}"]  = s.rolling(window, min_periods=1).max()
